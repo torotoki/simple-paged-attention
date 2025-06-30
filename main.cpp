@@ -1,0 +1,72 @@
+#include <iostream>
+#include <cassert>
+#include <stdexcept>
+#include <map>
+#include <string>
+
+#include "common/host_utils.cpp"
+#include "common/string_utils.cpp"
+#include "common/timer.cpp"
+#include "gpu_attention.cuh"
+
+#include <cuda_runtime.h>
+
+using namespace std;
+
+void runBenchmarkOneIter(
+  string command,
+  int context_size = 512,
+  int d_model = 256,      // embedding dimention
+  int d_k = 128,          // Q's, K's and V's hidden dimention
+  bool verbose = true
+) {
+  /**
+   * Input:
+   *   - W_Q, W_K, W_V: d_model x d_k
+   *     -> Q = X x W_Q : context_size x d_k
+   *     -> Q x K^T : context_size x context_size
+   *     -> (softmax(Q x K^T) / d_k) x V : context_size x d_k
+   *   - words: vector<string>
+   *     -> X: context_size x d_model
+   */
+  string input = "The fire burns twice as bright burns half as long .";
+  vector<string> words = split(input);
+  if (verbose)
+    cout << "Input words: " << input << endl;
+
+  // Generate embeddings
+  map<string, vector<float>> embedding_table;
+  Matrix<float> X(context_size, d_model);
+  InputGenerator generator = InputGenerator();
+
+  for (size_t i = 0; i < words.size(); ++i) {
+    vector<float> embedding;
+    if (embedding_table.find(words[i]) != embedding_table.end()) {
+      embedding = embedding_table[words[i]];
+    } else {
+      embedding = generator.generateRandomVector<float>(d_model);
+      embedding_table[words[i]] = embedding;
+    }
+    X.set_row(i, embedding);
+  }
+
+  Matrix W_Q = generator.generateConstantMatrix<float>(context_size, d_k);
+  Matrix W_K = generator.generateConstantMatrix<float>(context_size, d_k);
+  Matrix W_V = generator.generateConstantMatrix<float>(context_size, d_k);
+
+  if (command == "attention") {
+    Matrix<float> computed = launch_attention_kernel(W_Q, W_K, W_V, X);
+  } else {
+    throw std::runtime_error("Unknown command: " + command);
+  }
+}
+
+int main(int argc, char* argv[]) {
+  string command = "attention";
+  if (argc >= 2) {
+    command = argv[1];
+  }
+  
+  cout << "Command: " << command << endl;
+  runBenchmarkOneIter(command);
+}
