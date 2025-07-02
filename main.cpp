@@ -4,19 +4,17 @@
 #include <map>
 #include <string>
 
-#include "common/host_utils.cpp"
+#include "common/host_utils.h"
 #include "common/string_utils.cpp"
 #include "common/timer.cpp"
-#include "gpu_attention.cuh"
-
-#include <cuda_runtime.h>
+#include "cpu_attention.hpp"
 
 using namespace std;
 
 
 void runBenchmarkOneIter(
   string command,
-  int context_size = 512,
+  int context_size = 14,
   int d_model = 256,      // embedding dimention
   int d_k = 128,          // Q's, K's and V's hidden dimention
   bool verbose = true
@@ -45,25 +43,34 @@ void runBenchmarkOneIter(
     if (embedding_table.find(words[i]) != embedding_table.end()) {
       embedding = embedding_table[words[i]];
     } else {
-      embedding = generator.generateRandomVector<float>(d_model);
+      embedding = generator.generateRandomVector<float>(d_model, -0.25f, 0.25f);
       embedding_table[words[i]] = embedding;
     }
     X.set_row(i, embedding);
   }
 
-  Matrix W_Q = generator.generateConstantMatrix<float>(context_size, d_k);
-  Matrix W_K = generator.generateConstantMatrix<float>(context_size, d_k);
-  Matrix W_V = generator.generateConstantMatrix<float>(context_size, d_k);
+  Matrix W_Q = generator.generateConstantMatrix<float>(d_model, d_k);
+  Matrix W_K = generator.generateConstantMatrix<float>(d_model, d_k);
+  Matrix W_V = generator.generateConstantMatrix<float>(d_model, d_k);
 
-  if (command == "attention") {
-    Matrix<float> computed = launch_attention_kernel(W_Q, W_K, W_V, X);
+  if (command == "cpu_attention") {
+    Matrix<float> computed = compute_attention_on_cpu(context_size, d_model, d_k, W_Q, W_K, W_V, X);
+    for (int i = 0; i < words.size(); ++i) {
+      for (int j = 0; j < d_k; ++j) {
+        cout << computed.at(i, j) << " ";
+      }
+      cout << endl;
+    }
+    cout << endl;
+  } else if (command == "attention") {
+    // Matrix<float> computed = launch_attention_kernel(W_Q, W_K, W_V, X);
   } else {
     throw std::runtime_error("Unknown command: " + command);
   }
 }
 
 int main(int argc, char* argv[]) {
-  string command = "attention";
+  string command = "cpu_attention";
   if (argc >= 2) {
     command = argv[1];
   }

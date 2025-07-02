@@ -1,5 +1,9 @@
+#pragma once
+
 #include <random>
+#include <type_traits>
 #include <vector>
+#include <iostream>
 #include <cassert>
 
 using namespace std;
@@ -55,6 +59,18 @@ class Matrix {
     }
 };
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const Matrix<T>& matrix) {
+  for (int i = 0; i < matrix.num_rows; ++i) {
+    for (int j = 0; j < matrix.num_cols; ++j) {
+      os << matrix.at(i, j);
+      if (j < matrix.num_cols - 1) os << "\t";
+    }
+    os << "\n";
+  }
+  return os;
+}
+
 class InputGenerator {
 
  public:
@@ -63,12 +79,24 @@ class InputGenerator {
   }
 
   template <typename T>
-  vector<T> generateRandomVector(size_t size) {
-    std::uniform_int_distribution<> dist(0, 32767);
+  vector<T> generateRandomVector(
+      size_t size,
+      T minimum = 0,
+      T maximum = 32767
+  ) {
     vector<T> result(size);
+    if (std::is_same_v<T, int>) {
+      std::uniform_int_distribution<> dist(minimum, maximum);
 
-    for (size_t i = 0; i < size; ++i) {
-      result[i] = dist(random_generator);
+      for (size_t i = 0; i < size; ++i) {
+        result[i] = dist(random_generator);
+      }
+    } else { 
+      std::uniform_real_distribution<> dist(minimum, maximum);
+
+      for (size_t i = 0; i < size; ++i) {
+        result[i] = dist(random_generator);
+      }
     }
     return result;
   }
