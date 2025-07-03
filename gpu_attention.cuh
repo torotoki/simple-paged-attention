@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/host_utils.cpp"
+#include "common/host_utils.h"
 
 Matrix<float> launch_attention_kernel(
     Matrix<float> W_Q,

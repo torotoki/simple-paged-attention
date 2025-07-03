@@ -89,11 +89,11 @@ Matrix<float> compute_attention_on_cpu(
   simple_gemm(context_size, d_model, d_k, X.get(), W_V.get(), V.get());
 
   Matrix<float> QKT(context_size, context_size);
+  Matrix<float> out(context_size, d_k);
   cout << "QKT: " << QKT.num_rows << " " << QKT.num_cols << endl;
+  cout << "out: " << out.num_rows << " " << out.num_cols << endl;
   transpose_gemm(context_size, d_k, Q.get(), K.get(), QKT.get());
   softmax_norm(context_size, context_size, QKT.get(), d_k);
-  Matrix<float> out(context_size, d_k);
-  cout << "out: " << out.num_rows << " " << out.num_cols << endl;
   simple_gemm(context_size, context_size, d_k, QKT.get(), V.get(), out.get());
   return out;
 };
