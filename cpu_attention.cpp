@@ -27,11 +27,17 @@ void transpose_gemm(
   float* B,
   float* out
 ) {
+  /**
+   * A: N x M
+   * B: N x M
+   * out: N x N
+   */
+
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
       float res = 0.0f;
       for (int k = 0; k < M; ++k) {
-        res += A[i * M + k] * B[j * M + k];
+        res += A[i * M + k] * B[k * N + j];
       }
       out[i * N + j] = res;
     }
@@ -42,27 +48,30 @@ void softmax_norm(
   int N,
   int M,
   float* A,
-  int d_k = 1.0
+  int d_k = 1
 ) {
+  /**
+   * Assumption:
+   *  A: context_size (N) x context_size (M)
+   *
+   **/
+
   assert(N > 0 && M > 0);
-  float max_element = A[0];
-  float sum = 0.0f;
   float norm = std::sqrt(d_k);
   for (int i = 0; i < N; ++i) {
+    float max_value = A[i * M];
     for (int j = 0; j < M; ++j) {
-      // normalize the value by sqrt(d_k) for transformer
-      A[i * M + j] = A[i * M + j] / norm;
-      max_element = max(max_element, A[i * M + j]);
+      max_value = max(max_value, A[i * M + j] / norm);
     }
-  }
-  for (int i = 0; i < N; ++i) {
+
+    float sum = 0.0f;
     for (int j = 0; j < M; ++j) {
-      sum += std::exp(A[i * M + j] - max_element);
+      A[i * M + j] = std::exp(A[i * M + j] / norm - max_value);
+      sum += A[i * M + j];
     }
-  }
-  for (int i = 0; i < N; ++i) {
+
     for (int j = 0; j < M; ++j) {
-      A[i * M + j] = std::exp(A[i * M + j] - max_element) / sum;
+      A[i * M + j] /= sum;
     }
   }
 }

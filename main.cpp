@@ -63,7 +63,7 @@ void runBenchmarkOneIter(
     }
     cout << endl;
   } else if (command == "attention") {
-    // Matrix<float> computed = launch_attention_kernel(W_Q, W_K, W_V, X);
+    // Matrix<float> computed = launch_attention_kernel(context_size, d_model, d_k, W_Q, W_K, W_V, X);
   } else {
     throw std::runtime_error("Unknown command: " + command);
   }
