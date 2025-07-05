@@ -1,6 +1,6 @@
 TARGET = main
 
-SRC = main.cpp cpu_attention.cpp #gpu_scan.cu
+SRC = main.cpp cpu_attention.cpp gpu_attention.cu
 
 NVCC = nvcc
 

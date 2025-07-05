@@ -37,7 +37,7 @@ void transpose_gemm(
     for (int j = 0; j < N; ++j) {
       float res = 0.0f;
       for (int k = 0; k < M; ++k) {
-        res += A[i * M + k] * B[k * N + j];
+        res += A[i * M + k] * B[j * M + k];
       }
       out[i * N + j] = res;
     }
@@ -59,7 +59,7 @@ void softmax_norm(
   assert(N > 0 && M > 0);
   float norm = std::sqrt(d_k);
   for (int i = 0; i < N; ++i) {
-    float max_value = A[i * M];
+    float max_value = A[i * M] / norm;
     for (int j = 0; j < M; ++j) {
       max_value = max(max_value, A[i * M + j] / norm);
     }
@@ -80,10 +80,10 @@ Matrix<float> compute_attention_on_cpu(
     int context_size,
     int d_model,
     int d_k,
-    Matrix<float> W_Q,
-    Matrix<float> W_K,
-    Matrix<float> W_V,
-    Matrix<float> X
+    Matrix<float>& W_Q,
+    Matrix<float>& W_K,
+    Matrix<float>& W_V,
+    Matrix<float>& X
 ) {
   // write code here
   //

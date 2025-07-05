@@ -17,7 +17,7 @@ __global__ void simple_gemm_kernel(
     for (int j = 0; j < M; ++j) {
       sum += A[global_idx * M + j] * B[j * L + global_idy];
     }
-    C[global_idy * L + global_idx] = sum;
+    C[global_idx * L + global_idy] = sum;
 }
 
 void launch_simple_gemm_kernel(
@@ -49,9 +49,12 @@ __global__ void transpose_gemm_kernel(
 
   float sum = 0.0f;
   for (int j = 0; j < M; ++j) {
-    sum += A[global_idx * M + j] * B[global_idy * N + j];
+    // Q (N x d_k),  K (N x d_k)
+    // Q (N x d_k) \dot K^T (d_k x N)
+    // out (N x N)
+    sum += A[global_idx * M + j] * B[global_idy * M + j];
   }
-  out[global_idy * N + global_idx] = sum;
+  out[global_idx * N + global_idy] = sum;
 }
 
 void launch_transpose_gemm_kernel(
@@ -73,7 +76,7 @@ void launch_transpose_gemm_kernel(
 
 __global__ void softmax_norm_kernel(
     int N, int M,
-    float* A, int norm
+    float* A, float norm
 ) {
   /**
    * Very naive implementation of softmax
@@ -87,7 +90,7 @@ __global__ void softmax_norm_kernel(
   int global_idy = blockIdx.y * blockDim.y + threadIdx.y;
 
   __shared__ float max_value, sum;
-  max_value = A[global_idy * M + 0];
+  max_value = A[global_idy * M + 0] / norm;
   sum = 0.0f;
   if (threadIdx.x == 0) {
     for (int j = 0; j < M; ++j) {
@@ -102,7 +105,7 @@ __global__ void softmax_norm_kernel(
   }
   cg::sync(cta);
 
-  if (global_idx <= N && global_idy <= M) {
+  if (global_idx < N && global_idy < M) {
     A[global_idy * M + global_idx] =
       exp(A[global_idy * M + global_idx] / norm - max_value) / sum;
   }
@@ -117,7 +120,7 @@ void launch_softmax_norm_kernel(
   assert(N > 0 && M > 0);
   float norm = std::sqrt(d_k);
 
-  dim3 block_size(16, 16);
+  dim3 block_size(16, 1);
   dim3 grid_size(
       (N + block_size.x - 1) / block_size.x,
       (M + block_size.y - 1) / block_size.y
@@ -173,17 +176,18 @@ Matrix<float> launch_attention_kernels(
   launch_softmax_norm_kernel(context_size, context_size, d_QKT, d_k);
   launch_simple_gemm_kernel(context_size, context_size, d_k, d_QKT, d_V, d_out);
   checkCudaErrors(cudaMemcpy(h_out.get(), d_out, output_size, cudaMemcpyDefault));
+  cudaDeviceSynchronize();
 
   // Free memory
-  checkCudaErrors(cudaFree(&d_out));
-  checkCudaErrors(cudaFree(&d_QKT));
-  checkCudaErrors(cudaFree(&d_Q));
-  checkCudaErrors(cudaFree(&d_K));
-  checkCudaErrors(cudaFree(&d_V));
-  checkCudaErrors(cudaFree(&d_W_Q));
-  checkCudaErrors(cudaFree(&d_W_K));
-  checkCudaErrors(cudaFree(&d_W_V));
-  checkCudaErrors(cudaFree(&d_X));
+  checkCudaErrors(cudaFree(d_out));
+  checkCudaErrors(cudaFree(d_QKT));
+  checkCudaErrors(cudaFree(d_Q));
+  checkCudaErrors(cudaFree(d_K));
+  checkCudaErrors(cudaFree(d_V));
+  checkCudaErrors(cudaFree(d_W_Q));
+  checkCudaErrors(cudaFree(d_W_K));
+  checkCudaErrors(cudaFree(d_W_V));
+  checkCudaErrors(cudaFree(d_X));
 
   return h_out;
 };

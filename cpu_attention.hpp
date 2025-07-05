@@ -29,9 +29,9 @@ Matrix<float> compute_attention_on_cpu(
     int context_size,
     int d_model,
     int d_k,
-    Matrix<float> W_Q,
-    Matrix<float> W_K,
-    Matrix<float> W_V,
-    Matrix<float> X
+    Matrix<float>& W_Q,
+    Matrix<float>& W_K,
+    Matrix<float>& W_V,
+    Matrix<float>& X
 );
 

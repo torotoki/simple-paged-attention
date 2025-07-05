@@ -8,6 +8,7 @@
 #include "common/string_utils.cpp"
 #include "common/timer.cpp"
 #include "cpu_attention.hpp"
+#include "gpu_attention.cuh"
 
 using namespace std;
 
@@ -63,14 +64,35 @@ void runBenchmarkOneIter(
     }
     cout << endl;
   } else if (command == "attention") {
-    // Matrix<float> computed = launch_attention_kernel(context_size, d_model, d_k, W_Q, W_K, W_V, X);
+    Matrix<float> computed = launch_attention_kernels(context_size, d_model, d_k, W_Q, W_K, W_V, X);
+    for (int i = 0; i < words.size(); ++i) {
+      for (int j = 0; j < d_k; ++j) {
+        cout << computed.at(i, j) << " ";
+      }
+      cout << endl;
+    }
+    cout << endl;
+    
+
+    Matrix<float> expected = compute_attention_on_cpu(context_size, d_model, d_k, W_Q, W_K, W_V, X);
+    cout << "=========== EXPECTED: ============" << endl;
+    for (int i = 0; i < words.size(); ++i) {
+      for (int j = 0; j < d_k; ++j) {
+        cout << expected.at(i, j) << " ";
+      }
+      cout << endl;
+    }
+    cout << endl;
+
+    assert(computed == expected);
+
   } else {
     throw std::runtime_error("Unknown command: " + command);
   }
 }
 
 int main(int argc, char* argv[]) {
-  string command = "cpu_attention";
+  string command = "attention";
   if (argc >= 2) {
     command = argv[1];
   }
