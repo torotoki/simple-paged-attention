@@ -32,6 +32,7 @@ Matrix<float> compute_attention_on_cpu(
     Matrix<float>& W_Q,
     Matrix<float>& W_K,
     Matrix<float>& W_V,
-    Matrix<float>& X
+    Matrix<float>& X,
+    bool verbose = false
 );
 

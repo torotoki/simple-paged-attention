@@ -6,9 +6,7 @@
 #include <chrono>
 #include <cassert>
 
-#ifdef __CUDACC__
-  #include <cuda_runtime.h>
-#endif
+#include <cuda_runtime.h>
 
 using namespace std;
 
@@ -17,31 +15,25 @@ class Stopwatch {
     Stopwatch(string mode = "chrono") : mode(mode) {
       set<string> options = {"chrono", "cuda"};
       assert(options.count(mode));
-      #ifdef __CUDACC__
-        if (mode == "cuda") {
-          cudaEventCreate(&cuda_start);
-          cudaEventCreate(&cuda_stop);
-        }
-      #endif
+      if (mode == "cuda") {
+        cudaEventCreate(&cuda_start);
+        cudaEventCreate(&cuda_stop);
+      }
     }
 
     ~Stopwatch() {
-      #ifdef __CUDACC__
-        if (mode == "cuda") {
-          cudaEventDestroy(cuda_start);
-          cudaEventDestroy(cuda_stop);
-        }
-      #endif
+      if (mode == "cuda") {
+        cudaEventDestroy(cuda_start);
+        cudaEventDestroy(cuda_stop);
+      }
     }
 
     void start() {
       assert(intervals.size() == 0 && !finished);
       if (mode == "chrono")
         intervals.push_back(chrono::system_clock::now());
-      #ifdef __CUDACC__
       else
         cudaEventRecord(cuda_start);
-      #endif
     }
 
     void pause() {
@@ -49,10 +41,8 @@ class Stopwatch {
         assert(intervals.size() % 2 == 1 && !finished);
         intervals.push_back(chrono::system_clock::now());
       } else {
-        #ifdef __CUDACC__
-          cudaEventRecord(cuda_stop);
-          cudaEventSynchronize(cuda_stop);
-        #endif
+        cudaEventRecord(cuda_stop);
+        cudaEventSynchronize(cuda_stop);
       }
     }
 
@@ -84,12 +74,9 @@ class Stopwatch {
         return chrono::duration<double, std::milli>
           (intervals.back() - intervals.front()).count();
       else {
-        #ifdef __CUDACC__
         float msec = 0.0f;
         cudaEventElapsedTime(&msec, cuda_start, cuda_stop);
         return (double)msec;
-        #endif
-        return -1;
       }
     }
 
@@ -124,8 +111,6 @@ class Stopwatch {
     vector<chrono::system_clock::time_point> intervals;
     bool finished = false;
     string mode;
-    #ifdef __CUDACC__
-      cudaEvent_t cuda_start, cuda_stop;
-    #endif
+    cudaEvent_t cuda_start, cuda_stop;
 };
 

@@ -83,24 +83,29 @@ Matrix<float> compute_attention_on_cpu(
     Matrix<float>& W_Q,
     Matrix<float>& W_K,
     Matrix<float>& W_V,
-    Matrix<float>& X
+    Matrix<float>& X,
+    bool verbose = false
 ) {
   // write code here
   //
   Matrix<float> Q(context_size, d_k);
   Matrix<float> K(context_size, d_k);
   Matrix<float> V(context_size, d_k);
-  cout << "X: " << X.num_rows << " " << X.num_cols << endl;
-  cout << "W_Q: " << W_Q.num_rows << " " << W_Q.num_cols << endl;
-  cout << "Q: " << Q.num_rows << " " << Q.num_cols << endl;
+  if (verbose) {
+    cout << "X: " << X.num_rows << " " << X.num_cols << endl;
+    cout << "W_Q: " << W_Q.num_rows << " " << W_Q.num_cols << endl;
+    cout << "Q: " << Q.num_rows << " " << Q.num_cols << endl;
+  }
   simple_gemm(context_size, d_model, d_k, X.get(), W_Q.get(), Q.get());
   simple_gemm(context_size, d_model, d_k, X.get(), W_K.get(), K.get());
   simple_gemm(context_size, d_model, d_k, X.get(), W_V.get(), V.get());
 
   Matrix<float> QKT(context_size, context_size);
   Matrix<float> out(context_size, d_k);
-  cout << "QKT: " << QKT.num_rows << " " << QKT.num_cols << endl;
-  cout << "out: " << out.num_rows << " " << out.num_cols << endl;
+  if (verbose) {
+    cout << "QKT: " << QKT.num_rows << " " << QKT.num_cols << endl;
+    cout << "out: " << out.num_rows << " " << out.num_cols << endl;
+  }
   transpose_gemm(context_size, d_k, Q.get(), K.get(), QKT.get());
   softmax_norm(context_size, context_size, QKT.get(), d_k);
   simple_gemm(context_size, context_size, d_k, QKT.get(), V.get(), out.get());

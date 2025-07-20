@@ -10,4 +10,12 @@ It contains five types of implementations:
 - Attention with autoregressive output and KV-cache (common in inference) on GPU
 - PagedAttention on GPU
 
+## Benchmark Results:
 
+```
+Command: attention_gpu
+Averaged Time (msec): 1.21769
+
+Command: attention_cpu
+Averaged Time (msec): 3.42877
+```
