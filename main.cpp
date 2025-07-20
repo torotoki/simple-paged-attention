@@ -9,6 +9,7 @@
 #include "common/timer.cpp"
 #include "cpu_attention.hpp"
 #include "gpu_attention.cuh"
+#include "cpu_autoregressive_attention.hpp"
 
 using namespace std;
 
@@ -55,14 +56,16 @@ double runBenchmarkOneIter(
   Matrix W_V = generator.generateConstantMatrix<float>(d_model, d_k);
 
   Matrix<float> expected = compute_attention_on_cpu(context_size, d_model, d_k, W_Q, W_K, W_V, X, verbose);
-  // cout << "=========== EXPECTED: ============" << endl;
-  // for (int i = 0; i < words.size(); ++i) {
-  //   for (int j = 0; j < d_k; ++j) {
-  //     cout << expected.at(i, j) << " ";
-  //   }
-  //   cout << endl;
-  // }
-  // cout << endl;
+  if (verbose) {
+    cout << "=========== EXPECTED: ============" << endl;
+    for (int i = 0; i < words.size(); ++i) {
+      for (int j = 0; j < d_k; ++j) {
+        cout << expected.at(i, j) << " ";
+      }
+      cout << endl;
+    }
+    cout << endl;
+  }
 
   double elapsed_time_msec;
   if (command == "attention_cpu") {
@@ -72,13 +75,15 @@ double runBenchmarkOneIter(
     stopwatch.stop();
     elapsed_time_msec = stopwatch.get_elapsed_time_msec();
 
-    // for (int i = 0; i < words.size(); ++i) {
-    //   for (int j = 0; j < d_k; ++j) {
-    //     cout << computed.at(i, j) << " ";
-    //   }
-    //   cout << endl;
-    // }
-    // cout << endl;
+    if (verbose) {
+      for (int i = 0; i < words.size(); ++i) {
+        for (int j = 0; j < d_k; ++j) {
+          cout << computed.at(i, j) << " ";
+        }
+        cout << endl;
+      }
+      cout << endl;
+    }
   } else if (command == "attention_gpu") {
     Stopwatch stopwatch = Stopwatch("cuda");
     stopwatch.start();
@@ -87,13 +92,35 @@ double runBenchmarkOneIter(
     elapsed_time_msec = stopwatch.get_elapsed_time_msec();
 
     // Verification
-    // for (int i = 0; i < words.size(); ++i) {
-    //   for (int j = 0; j < d_k; ++j) {
-    //     cout << computed.at(i, j) << " ";
-    //   }
-    //   cout << endl;
-    // }
-    // cout << endl;
+    if (verbose) {
+      for (int i = 0; i < words.size(); ++i) {
+        for (int j = 0; j < d_k; ++j) {
+          cout << computed.at(i, j) << " ";
+        }
+        cout << endl;
+      }
+      cout << endl;
+    }
+    assert(computed == expected);
+  } else if (command == "attention_cpu_autoregressive") {
+    Stopwatch stopwatch = Stopwatch("chrono");
+    stopwatch.start();
+    Matrix<float> computed =
+      CPUAutoregressiveAttention::compute_autoregressive_attention_on_cpu(
+          context_size, d_model, d_k, W_Q, W_K, W_V, X
+      );
+    stopwatch.stop();
+    elapsed_time_msec = stopwatch.get_elapsed_time_msec();
+
+    if (verbose) {
+      for (int i = 0; i < words.size(); ++i) {
+        for (int j = 0; j < d_k; ++j) {
+          cout << computed.at(i, j) << " ";
+        }
+        cout << endl;
+      }
+      cout << endl;
+    }
     assert(computed == expected);
   } else {
     throw std::runtime_error("Unknown command: " + command);
@@ -125,12 +152,12 @@ void runBenchmark(
 }
 
 int main(int argc, char* argv[]) {
-  string command = "attention_cpu";
+  string command = "attention_cpu_autoregressive";
   if (argc >= 2) {
     command = argv[1];
   }
   
   cout << "Command: " << command << endl;
-  // runBenchmarkOneIter(command);
-  runBenchmark(command);
+  runBenchmarkOneIter(command);
+  // runBenchmark(command);
 }
