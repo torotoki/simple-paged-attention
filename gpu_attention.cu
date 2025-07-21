@@ -1,9 +1,11 @@
+#include <limits>
 #include "common/host_utils.h"
 #include "common/cuda_utility.hpp"
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
 
 namespace cg = cooperative_groups;
+constexpr float NEG_INF = -std::numeric_limits<float>::max();
 
 __global__ void simple_gemm_kernel(
     int N, int M, int L,
@@ -39,14 +41,18 @@ void launch_simple_gemm_kernel(
   );
 }
 
-__global__ void transpose_gemm_kernel(
+__global__ void transpose_gemm_kernel_with_mask(
     int N, int M,
     float* A, float* B, float* out
 ) {
-  // TODO: implement mask
   int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
   int global_idy = blockDim.y * blockIdx.y + threadIdx.y;
   if (global_idx >= N || global_idy >= N) return;
+  if (global_idy > global_idx) {
+    // Causal mask
+    out[global_idx * N + global_idy] = NEG_INF;
+    return;
+  }
 
   float sum = 0.0f;
   for (int j = 0; j < M; ++j) {
@@ -70,7 +76,7 @@ void launch_transpose_gemm_kernel(
       (N + block_size.x - 1) / block_size.x,
       (N + block_size.y - 1) / block_size.y
   );
-  transpose_gemm_kernel<<<grid_size, block_size>>>(
+  transpose_gemm_kernel_with_mask<<<grid_size, block_size>>>(
       N, M, A, B, out
   );
 }
@@ -82,7 +88,8 @@ __global__ void softmax_norm_kernel(
   /**
    * Very naive implementation of softmax
    * 1) 行ごとにsum_exp, max を集計する
-   * 2) exp((A[i, j] - max) / d_k) / sum_exp
+   * 2) Compute `exp((A[i, j] - max) / d_k) / sum_exp`
+   * where
    *   sum_exp = Sigma_j exp((A[i, j] - max) / d_k)
    *
    **/
@@ -98,7 +105,6 @@ __global__ void softmax_norm_kernel(
       max_value = max(max_value, A[global_idy * M + j] / norm);
     }
   }
-  cg::sync(cta);
   if (threadIdx.x == 0) {
     for (int j = 0; j < M; ++j) {
       sum += exp(A[global_idy * M + j] / norm - max_value);
@@ -106,7 +112,7 @@ __global__ void softmax_norm_kernel(
   }
   cg::sync(cta);
 
-  if (global_idx < N && global_idy < M) {
+  if (global_idy < N && global_idx < M) {
     A[global_idy * M + global_idx] =
       exp(A[global_idy * M + global_idx] / norm - max_value) / sum;
   }
@@ -118,13 +124,16 @@ void launch_softmax_norm_kernel(
   float* A,
   int d_k = 1
 ) {
+  /** Suppose that
+   * N = 1, M = t
+   */
   assert(N > 0 && M > 0);
   float norm = std::sqrt(d_k);
 
   dim3 block_size(16, 1);
   dim3 grid_size(
-      (N + block_size.x - 1) / block_size.x,
-      (M + block_size.y - 1) / block_size.y
+      (M + block_size.x - 1) / block_size.x,
+      (N + block_size.y - 1) / block_size.y
   );
   softmax_norm_kernel<<<grid_size, block_size>>>(
       N, M, A, norm

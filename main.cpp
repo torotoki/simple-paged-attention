@@ -10,6 +10,7 @@
 #include "cpu_attention.hpp"
 #include "gpu_attention.cuh"
 #include "cpu_autoregressive_attention.hpp"
+#include "gpu_autoregressive_attention.hpp"
 
 using namespace std;
 
@@ -124,6 +125,29 @@ double runBenchmarkOneIter(
       cout << endl;
     }
     assert(computed == expected);
+  } else if (command == "attention_gpu_autoregressive") {
+    Stopwatch stopwatch = Stopwatch("cuda");
+    bool enable_kv_cache = false;
+    cout << "Enable KV cache: " << enable_kv_cache << endl;
+    stopwatch.start();
+    Matrix<float> computed =
+      GPUAutoregressiveAttention::launch_autoregressive_attention_kernels(
+          context_size, d_model, d_k, W_Q, W_K, W_V, X, enable_kv_cache
+      );
+    stopwatch.stop();
+    elapsed_time_msec = stopwatch.get_elapsed_time_msec();
+
+    // Verification
+    if (verbose) {
+      for (int i = 0; i < words.size(); ++i) {
+        for (int j = 0; j < d_k; ++j) {
+          cout << computed.at(i, j) << " ";
+        }
+        cout << endl;
+      }
+      cout << endl;
+    }
+    assert(computed == expected);
   } else {
     throw std::runtime_error("Unknown command: " + command);
   }
@@ -154,7 +178,7 @@ void runBenchmark(
 }
 
 int main(int argc, char* argv[]) {
-  string command = "attention_cpu_autoregressive";
+  string command = "attention_gpu_autoregressive";
   if (argc >= 2) {
     command = argv[1];
   }

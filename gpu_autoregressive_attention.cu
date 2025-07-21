@@ -61,9 +61,9 @@ __global__ void transpose_gemm_imbalance_kernel(
     // Q (N x d_k),  K (N x d_k)
     // Q (N x d_k) \dot K^T (d_k x N)
     // out (N x N)
-    sum += A[global_idx * M + j] * B[global_idy * M + j];
+    sum += A[global_idy * M + j] * B[global_idx * M + j];
   }
-  out[global_idx * r + global_idy] = sum;
+  out[global_idy * r + global_idx] = sum;
 }
 
 void launch_transpose_gemm_imbalance_kernel(
@@ -74,7 +74,7 @@ void launch_transpose_gemm_imbalance_kernel(
   float* B,
   float* out
 ) {
-  dim3 block_size(16, 16);
+  dim3 block_size(16, 1);
   dim3 grid_size(
       (r + block_size.x - 1) / block_size.x,
       (N + block_size.y - 1) / block_size.y
@@ -94,6 +94,9 @@ __global__ void softmax_norm_kernel(
    * 2) exp((A[i, j] - max) / d_k) / sum_exp
    *   sum_exp = Sigma_j exp((A[i, j] - max) / d_k)
    *
+   * TODO: Separate max() and sum() computations and
+   * then compute softmax computation.
+   * Currently this does not support large M > (block size)
    **/
   cg::thread_block cta = cg::this_thread_block();
   int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -107,7 +110,6 @@ __global__ void softmax_norm_kernel(
       max_value = max(max_value, A[global_idy * M + j] / norm);
     }
   }
-  cg::sync(cta);
   if (threadIdx.x == 0) {
     for (int j = 0; j < M; ++j) {
       sum += exp(A[global_idy * M + j] / norm - max_value);
@@ -115,7 +117,7 @@ __global__ void softmax_norm_kernel(
   }
   cg::sync(cta);
 
-  if (global_idx < N && global_idy < M) {
+  if (global_idx < M && global_idy < N) {
     A[global_idy * M + global_idx] =
       exp(A[global_idy * M + global_idx] / norm - max_value) / sum;
   }
@@ -131,10 +133,10 @@ void launch_softmax_norm_kernel(
   assert(N > 0 && M > 0);
   float norm = std::sqrt(d_k);
 
-  dim3 block_size(16, 1);
+  dim3 block_size(128, 1);
   dim3 grid_size(
-      (N + block_size.x - 1) / block_size.x,
-      (M + block_size.y - 1) / block_size.y
+      (M + block_size.x - 1) / block_size.x,
+      (N + block_size.y - 1) / block_size.y
   );
   softmax_norm_kernel<<<grid_size, block_size>>>(
       N, M, A, norm
@@ -197,7 +199,17 @@ Matrix<float> launch_autoregressive_attention_kernels(
       launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_K, d_K_cache);
       launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_V, d_V_cache);
     } else {
-      assert(false);
+      // Reuse a part of K and V that have been already computed
+      if (t == 1) {
+        launch_simple_gemm_kernel(1, d_model, d_k, d_X, d_W_K, d_K_cache);
+        launch_simple_gemm_kernel(1, d_model, d_k, d_X, d_W_V, d_V_cache);
+      } else {
+        float* d_new_embed = d_X + (t - 1) * d_model;
+        float* d_K_tail = d_K_cache + (t - 1) * d_k;
+        float* d_V_tail = d_V_cache + (t - 1) * d_k;
+        launch_simple_gemm_kernel(1, d_model, d_k, d_new_embed, d_W_K, d_K_tail);
+        launch_simple_gemm_kernel(1, d_model, d_k, d_new_embed, d_W_V, d_V_tail);
+      }
     }
 
     // QKT (1 x t) = Q (1 x d_k) ・K^T (t x d_k)^T
