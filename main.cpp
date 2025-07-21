@@ -104,10 +104,12 @@ double runBenchmarkOneIter(
     assert(computed == expected);
   } else if (command == "attention_cpu_autoregressive") {
     Stopwatch stopwatch = Stopwatch("chrono");
+    bool enable_kv_cache = false;
+    cout << "Enable KV cache: " << enable_kv_cache << endl;
     stopwatch.start();
     Matrix<float> computed =
       CPUAutoregressiveAttention::compute_autoregressive_attention_on_cpu(
-          context_size, d_model, d_k, W_Q, W_K, W_V, X
+          context_size, d_model, d_k, W_Q, W_K, W_V, X, enable_kv_cache
       );
     stopwatch.stop();
     elapsed_time_msec = stopwatch.get_elapsed_time_msec();
@@ -158,6 +160,6 @@ int main(int argc, char* argv[]) {
   }
   
   cout << "Command: " << command << endl;
-  runBenchmarkOneIter(command);
-  // runBenchmark(command);
+  // runBenchmarkOneIter(command);
+  runBenchmark(command);
 }

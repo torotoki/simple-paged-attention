@@ -11,16 +11,16 @@ void simple_gemm(
 ) {
   for (int i = 0; i < N; ++i) {
     for (int k = 0; k < L; ++k) {
-      float res = 0.0f;
+      float acc = 0.0f;
       for (int j = 0; j < M; ++j) {
-        res += A[i * M + j] * B[j * L + k];
+        acc += A[i * M + j] * B[j * L + k];
       }
-      out[i * L + k] = res;
+      out[i * L + k] = acc;
     }
   }
 }
 
-void transpose_gemm(
+void transpose_gemm_with_mask(
   int N,
   int M,
   float* A,
@@ -32,14 +32,19 @@ void transpose_gemm(
    * B: N x M
    * out: N x N
    */
-
+  const float NEG_INF = -std::numeric_limits<float>::infinity();
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
-      float res = 0.0f;
-      for (int k = 0; k < M; ++k) {
-        res += A[i * M + k] * B[j * M + k];
+      float acc = 0.0f;
+      // query i, key j
+      if (j <= i) {
+        for (int k = 0; k < M; ++k) {
+          acc += A[i * M + k] * B[j * M + k];
+        }
+      } else {
+        acc = NEG_INF;
       }
-      out[i * N + j] = res;
+      out[i * N + j] = acc;
     }
   }
 }
@@ -106,7 +111,7 @@ Matrix<float> compute_attention_on_cpu(
     cout << "QKT: " << QKT.num_rows << " " << QKT.num_cols << endl;
     cout << "out: " << out.num_rows << " " << out.num_cols << endl;
   }
-  transpose_gemm(context_size, d_k, Q.get(), K.get(), QKT.get());
+  transpose_gemm_with_mask(context_size, d_k, Q.get(), K.get(), QKT.get());
   softmax_norm(context_size, context_size, QKT.get(), d_k);
   simple_gemm(context_size, context_size, d_k, QKT.get(), V.get(), out.get());
   return out;

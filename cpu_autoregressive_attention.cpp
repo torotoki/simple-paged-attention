@@ -23,6 +23,27 @@ void simple_gemm(
   }
 }
 
+void simple_gemm_with_kv_cache(
+  int N,
+  int M,
+  int L,
+  float* A,
+  float* B,
+  float* out
+) {
+  /**
+   * A: t x d_model
+   * B: d_model x d_k
+   */
+  for (int l = 0; l < L; ++l) {
+    float acc = 0.0f;
+    for (int m = 0; m < M; ++m) {
+      acc += A[(N - 1) * M + m] * B[m * L + l];
+    }
+    out[(N - 1) * L + l] = acc;
+  }
+}
+
 void transpose_gemm_imbalance(
   int N,
   int r,
@@ -89,7 +110,7 @@ Matrix<float> compute_autoregressive_attention_on_cpu(
     Matrix<float>& W_K,
     Matrix<float>& W_V,
     Matrix<float>& X,
-    bool enable_kv_cache = false,
+    bool enable_kv_cache = true,
     bool verbose = false
 ) {
   // write code here
@@ -108,13 +129,20 @@ Matrix<float> compute_autoregressive_attention_on_cpu(
     // Q: 1 x d_k
     simple_gemm(1, d_model, d_k, last_word_embed, W_Q.get(), Q.get());
 
+    // K_cache (t x d_k) = X (t x d_model) ・W_K (d_model x d_k)
+    // V_cache (t x d_k) = X (t x d_model) ・W_V (d_model x d_k)
     // TODO: Need to use KV-cache
     // Replace simple_gemm(...) to gemm_with_kv_cache(...)!
-    simple_gemm(t, d_model, d_k, X.get(), W_K.get(), K_cache.get());
-    simple_gemm(t, d_model, d_k, X.get(), W_V.get(), V_cache.get());
+    if (!enable_kv_cache) {
+      simple_gemm(t, d_model, d_k, X.get(), W_K.get(), K_cache.get());
+      simple_gemm(t, d_model, d_k, X.get(), W_V.get(), V_cache.get());
+    } else {
+      simple_gemm_with_kv_cache(t, d_model, d_k, X.get(), W_K.get(), K_cache.get());
+      simple_gemm_with_kv_cache(t, d_model, d_k, X.get(), W_V.get(), V_cache.get());
+    }
 
     Matrix<float> QKT(1, t);
-    // QKT (1 x t) = Q (1 x d_k) @ K^T (t, d_k)^T
+    // QKT (1 x t) = Q (1 x d_k) ・K^T (t, d_k)^T
     transpose_gemm_imbalance(1, t, d_k, Q.get(), K_cache.get(), QKT.get());
 
     softmax_norm(1, t, QKT.get(), d_k);
@@ -125,27 +153,5 @@ Matrix<float> compute_autoregressive_attention_on_cpu(
   }
 
   return out;
-  // Matrix<float> Q(context_size, d_k);
-  // Matrix<float> K(context_size, d_k);
-  // Matrix<float> V(context_size, d_k);
-  // if (verbose) {
-  //   cout << "X: " << X.num_rows << " " << X.num_cols << endl;
-  //   cout << "W_Q: " << W_Q.num_rows << " " << W_Q.num_cols << endl;
-  //   cout << "Q: " << Q.num_rows << " " << Q.num_cols << endl;
-  // }
-  // simple_gemm(context_size, d_model, d_k, X.get(), W_Q.get(), Q.get());
-  // simple_gemm(context_size, d_model, d_k, X.get(), W_K.get(), K.get());
-  // simple_gemm(context_size, d_model, d_k, X.get(), W_V.get(), V.get());
-  //
-  // Matrix<float> QKT(context_size, context_size);
-  // Matrix<float> out(context_size, d_k);
-  // if (verbose) {
-  //   cout << "QKT: " << QKT.num_rows << " " << QKT.num_cols << endl;
-  //   cout << "out: " << out.num_rows << " " << out.num_cols << endl;
-  // }
-  // transpose_gemm(context_size, d_k, Q.get(), K.get(), QKT.get());
-  // softmax_norm(context_size, context_size, QKT.get(), d_k);
-  // simple_gemm(context_size, context_size, d_k, QKT.get(), V.get(), out.get());
-  // return out;
 };
 }
