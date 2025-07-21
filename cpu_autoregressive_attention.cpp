@@ -131,18 +131,21 @@ Matrix<float> compute_autoregressive_attention_on_cpu(
 
     // K_cache (t x d_k) = X (t x d_model) ・W_K (d_model x d_k)
     // V_cache (t x d_k) = X (t x d_model) ・W_V (d_model x d_k)
-    // TODO: Need to use KV-cache
-    // Replace simple_gemm(...) to gemm_with_kv_cache(...)!
+    // If KV-cache is enabled, a part of matrix multiplication
+    // output is reused.
     if (!enable_kv_cache) {
       simple_gemm(t, d_model, d_k, X.get(), W_K.get(), K_cache.get());
       simple_gemm(t, d_model, d_k, X.get(), W_V.get(), V_cache.get());
     } else {
-      simple_gemm_with_kv_cache(t, d_model, d_k, X.get(), W_K.get(), K_cache.get());
-      simple_gemm_with_kv_cache(t, d_model, d_k, X.get(), W_V.get(), V_cache.get());
+      simple_gemm_with_kv_cache(
+          t, d_model, d_k, X.get(), W_K.get(), K_cache.get()
+      );
+      simple_gemm_with_kv_cache(
+          t, d_model, d_k, X.get(), W_V.get(), V_cache.get());
     }
 
     Matrix<float> QKT(1, t);
-    // QKT (1 x t) = Q (1 x d_k) ・K^T (t, d_k)^T
+    // QKT (1 x t) = Q (1 x d_k) ・K^T (t x d_k)^T
     transpose_gemm_imbalance(1, t, d_k, Q.get(), K_cache.get(), QKT.get());
 
     softmax_norm(1, t, QKT.get(), d_k);

@@ -1,3 +1,5 @@
+#include <cmath>
+#include <cassert>
 #include "common/host_utils.h"
 #include "common/cuda_utility.hpp"
 #include <cuda_runtime.h>
@@ -5,6 +7,7 @@
 
 namespace cg = cooperative_groups;
 
+namespace GPUAutoregressiveAttention {
 __global__ void simple_gemm_kernel(
     int N, int M, int L,
     float* A, float* B, float* C
@@ -39,14 +42,19 @@ void launch_simple_gemm_kernel(
   );
 }
 
-__global__ void transpose_gemm_kernel(
-    int N, int M,
+__global__ void transpose_gemm_imbalance_kernel(
+    int N, int r, int M,
     float* A, float* B, float* out
 ) {
-  // TODO: implement mask
+  /**
+   * Compute A ・B^T
+   * A: N x M
+   * B: r x M
+   * out: N x r
+   */
   int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
   int global_idy = blockDim.y * blockIdx.y + threadIdx.y;
-  if (global_idx >= N || global_idy >= N) return;
+  if (global_idx >= r || global_idy >= N) return;
 
   float sum = 0.0f;
   for (int j = 0; j < M; ++j) {
@@ -55,11 +63,12 @@ __global__ void transpose_gemm_kernel(
     // out (N x N)
     sum += A[global_idx * M + j] * B[global_idy * M + j];
   }
-  out[global_idx * N + global_idy] = sum;
+  out[global_idx * r + global_idy] = sum;
 }
 
-void launch_transpose_gemm_kernel(
+void launch_transpose_gemm_imbalance_kernel(
   int N,
+  int r,
   int M,
   float* A,
   float* B,
@@ -67,11 +76,11 @@ void launch_transpose_gemm_kernel(
 ) {
   dim3 block_size(16, 16);
   dim3 grid_size(
-      (N + block_size.x - 1) / block_size.x,
+      (r + block_size.x - 1) / block_size.x,
       (N + block_size.y - 1) / block_size.y
   );
-  transpose_gemm_kernel<<<grid_size, block_size>>>(
-      N, M, A, B, out
+  transpose_gemm_imbalance_kernel<<<grid_size, block_size>>>(
+      N, r, M, A, B, out
   );
 }
 
@@ -112,6 +121,7 @@ __global__ void softmax_norm_kernel(
   }
 }
 
+
 void launch_softmax_norm_kernel(
   int N,
   int M,
@@ -131,19 +141,24 @@ void launch_softmax_norm_kernel(
   );
 }
 
-Matrix<float> launch_attention_kernels(
+
+Matrix<float> launch_autoregressive_attention_kernels(
     int context_size,
     int d_model,
     int d_k,
-    Matrix<float> h_W_Q,
-    Matrix<float> h_W_K,
-    Matrix<float> h_W_V,
-    Matrix<float> h_X
+    Matrix<float>& h_W_Q,
+    Matrix<float>& h_W_K,
+    Matrix<float>& h_W_V,
+    Matrix<float>& h_X,
+    bool enable_kv_cache = false,
+    bool verbose = false
 ) {
-  // Input
-  float *d_W_Q, *d_W_K, *d_W_V, *d_X;
+  // write code here
+
+  float* d_W_Q, *d_W_K, *d_W_V, *d_X;
   size_t input_size = context_size * d_model * sizeof(float);
   size_t weight_size = d_model * d_k * sizeof(float);
+
   checkCudaErrors(cudaMalloc(&d_W_Q, weight_size));
   checkCudaErrors(cudaMalloc(&d_W_K, weight_size));
   checkCudaErrors(cudaMalloc(&d_W_V, weight_size));
@@ -154,42 +169,64 @@ Matrix<float> launch_attention_kernels(
   checkCudaErrors(cudaMemcpy(d_X, h_X.get(), input_size, cudaMemcpyDefault));
 
   // Intermediate output for projection
-  float *d_Q, *d_K, *d_V;
-  checkCudaErrors(cudaMalloc(&d_Q, context_size * d_k * sizeof(float)));
-  checkCudaErrors(cudaMalloc(&d_K, context_size * d_k * sizeof(float)));
-  checkCudaErrors(cudaMalloc(&d_V, context_size * d_k * sizeof(float)));
+  float *d_K_cache, *d_V_cache;
+  checkCudaErrors(cudaMalloc(&d_K_cache, context_size * d_k * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_V_cache, context_size * d_k * sizeof(float)));
 
-  // Compute attention matrix
-  launch_simple_gemm_kernel(context_size, d_model, d_k, d_X, d_W_Q, d_Q);
-  launch_simple_gemm_kernel(context_size, d_model, d_k, d_X, d_W_K, d_K);
-  launch_simple_gemm_kernel(context_size, d_model, d_k, d_X, d_W_V, d_V);
+  // Reuse d_Q over the time
+  float* d_Q;
+  checkCudaErrors(cudaMalloc(&d_Q, 1 * d_k * sizeof(float)));
 
-  // Intermediate output for attention, and output
+  // Variables for stacking outputs
   Matrix<float> h_out(context_size, d_k);
-  float *d_QKT, *d_out;
-  size_t qkt_size = context_size * context_size * sizeof(float);
+  float *d_out;
   size_t output_size = context_size * d_k * sizeof(float);
-  checkCudaErrors(cudaMalloc(&d_QKT, qkt_size));
   checkCudaErrors(cudaMalloc(&d_out, output_size));
 
-  // Compute softmax(QKT / norm) @ V
-  launch_transpose_gemm_kernel(context_size, d_k, d_Q, d_K, d_QKT);
-  launch_softmax_norm_kernel(context_size, context_size, d_QKT, d_k);
-  launch_simple_gemm_kernel(context_size, context_size, d_k, d_QKT, d_V, d_out);
+  // Compute the multiplicative attention iteratively
+  for (int t = 1; t <= context_size; ++t) {
+    // Q: 1 x d_k
+    
+    // h_last_word_embed: 1 x d_model
+    float* d_last_word_embed = &d_X[h_X.num_cols * (t - 1)];
+
+    // Q (1 x d_k) = last_word_embed (1 x d_model) ・W_Q (d_model x d_k)
+    launch_simple_gemm_kernel(1, d_model, d_k, d_last_word_embed, d_W_Q, d_Q);
+    
+    if (!enable_kv_cache) {
+      launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_K, d_K_cache);
+      launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_V, d_V_cache);
+    } else {
+      assert(false);
+    }
+
+    // QKT (1 x t) = Q (1 x d_k) ・K^T (t x d_k)^T
+    float* d_QKT;
+    checkCudaErrors(cudaMalloc(&d_QKT, 1 * t * sizeof(float)));
+    launch_transpose_gemm_imbalance_kernel(1, t, d_k, d_Q, d_K_cache, d_QKT);
+    
+    launch_softmax_norm_kernel(1, t, d_QKT, d_k);
+    
+    // Extract t-th output embedding
+    float* d_out_single_word = &d_out[h_out.num_cols * (t - 1)];
+    launch_simple_gemm_kernel(1, t, d_k, d_QKT, d_V_cache, d_out_single_word);
+
+    checkCudaErrors(cudaFree(d_QKT));
+  }
+
   checkCudaErrors(cudaMemcpy(h_out.get(), d_out, output_size, cudaMemcpyDefault));
   cudaDeviceSynchronize();
 
   // Free memory
   checkCudaErrors(cudaFree(d_out));
-  checkCudaErrors(cudaFree(d_QKT));
   checkCudaErrors(cudaFree(d_Q));
-  checkCudaErrors(cudaFree(d_K));
-  checkCudaErrors(cudaFree(d_V));
+  checkCudaErrors(cudaFree(d_K_cache));
+  checkCudaErrors(cudaFree(d_V_cache));
   checkCudaErrors(cudaFree(d_W_Q));
   checkCudaErrors(cudaFree(d_W_K));
   checkCudaErrors(cudaFree(d_W_V));
   checkCudaErrors(cudaFree(d_X));
 
   return h_out;
-};
-
+}
+}
