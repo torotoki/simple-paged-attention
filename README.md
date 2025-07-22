@@ -2,14 +2,15 @@
 
 This is an implementation of PagedAttention with CUDA and C++.
 
-It contains five types of implementations:
+This repo contains five types of attention implementations with (without) Key-Value caching (KV cache) mechanism as follows:
 
-- ✅ Standard causal attention on CPU
-- ✅ Standard causal attention on GPU
-- ✅ Attention with autoregressive output and KV-cache (common in inference) on CPU
-- ✅ Attention with autoregressive output and KV-cache (common in inference) on GPU
-- 🚧 PagedAttention on GPU
-
+| Method                      | Non KV cache | KV cache |
+|----------------------------------|:----------:|:----------:|
+| Standard causal attention on CPU | ✅        | -         |
+| Standard causal attention on GPU | ✅        | -             |
+| Attention with autoregressive output (common in inference) on CPU  | ✅        | ✅             |
+| Attention with autoregressive output (common in inference) on GPU  | ✅        | ✅            |
+| PagedAttention on GPU | - | 🚧 |
 
 ## Benchmark Results:
 
