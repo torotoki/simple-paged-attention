@@ -2,7 +2,7 @@
 
 This is an implementation of PagedAttention with CUDA and C++.
 
-This repo contains five types of attention implementations with (without) Key-Value caching (KV cache) mechanism as follows:
+This repo contains five types of attention implementations with and without the Key-Value caching mechanism (KV cache) as follows:
 
 | Method                      | Non KV cache | KV cache |
 |----------------------------------|:----------:|:----------:|
