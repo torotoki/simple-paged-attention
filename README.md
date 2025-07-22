@@ -1,6 +1,6 @@
 # simple-paged-attention
 
-This is an implementation of PagedAttention with CUDA and C++.
+This is a CUDA and C++ implementation of PagedAttention.
 
 This repo contains five types of attention implementations with and without the Key-Value caching mechanism (KV cache) as follows:
 
