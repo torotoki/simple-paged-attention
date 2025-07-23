@@ -12,7 +12,7 @@ This repo contains five types of attention implementations with and without the 
 | Attention with autoregressive output (common in inference) on GPU  | ✅        | ✅            |
 | PagedAttention on GPU | - | 🚧 |
 
-## Benchmark Results:
+## 📊 Benchmark Results:
 
 ```
 Command: attention_cpu
@@ -38,3 +38,8 @@ Enable KV cache: 1
 Averaged Time (msec): 2.88444
 ```
 
+## 📥 Get Started
+
+Coming soon: installation, usage examples, and code walkthroughs.
+
+Stay tuned and ⭐️ the repo to keep updated!
