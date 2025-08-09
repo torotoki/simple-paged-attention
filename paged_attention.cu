@@ -4,7 +4,7 @@
 #include "common/cuda_utility.hpp"
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
-#include "paging_manager2.cu"
+#include "paging_manager.cu"
 
 namespace cg = cooperative_groups;
 
@@ -40,6 +40,50 @@ void launch_simple_gemm_kernel(
   simple_gemm_kernel<<<grid_size, block_size>>>(
       N, M, L,
       d_A, d_B, d_out
+  );
+}
+
+__global__ void simple_gemm_with_cache_kernel(
+    int N, int M, int L,
+    float* A, float* B,
+    unsigned int* C_page_table, float* C_blocks
+) {
+    int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int global_idy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (global_idx >= N || global_idy >= L) return;
+    
+    float sum = 0.0f;
+    for (int j = 0; j < M; ++j) {
+      sum += A[global_idx * M + j] * B[j * L + global_idy];
+    }
+    int physical_address = translate_address(
+        global_idx,
+        global_idy / TOKENS_PER_BLOCK,
+        C_page_table
+    );
+
+    //C[global_idx * L + global_idy] = sum;
+    C_page_table[physical_address + (global_idy % TOKENS_PER_BLOCK)] = sum;
+}
+
+void launch_simple_gemm_kernel_with_cache(
+  int N,
+  int M,
+  int L,
+  float* d_A,
+  float* d_B,
+  unsigned int* d_out_page_table,
+  float* d_out_blocks
+) {
+  dim3 block_size(16, 16);
+  dim3 grid_size(
+      (N + block_size.x - 1) / block_size.x,
+      (L + block_size.y - 1) / block_size.y
+  );
+  simple_gemm_with_cache_kernel<<<grid_size, block_size>>>(
+      N, M, L,
+      d_A, d_B,
+      d_out_page_table, d_out_blocks
   );
 }
 
@@ -206,19 +250,19 @@ Matrix<float> launch_autoregressive_attention_kernels(
     
     if (!enable_kv_cache) {
       // TODO: replace launch_simple_gemm_kernel with KV-cache
-      launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_K, d_K_cache);
-      launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_V, d_V_cache);
+      launch_simple_gemm_kernel_with_cache(t, d_model, d_k, d_X, d_W_K, K_blocks, K_page_table);
+      launch_simple_gemm_kernel_with_cache(t, d_model, d_k, d_X, d_W_V, V_blocks, V_page_table);
     } else {
       // Reuse parts of K and V that have already been computed
       if (t == 1) {
-        launch_simple_gemm_kernel(1, d_model, d_k, d_X, d_W_K, d_K_cache);
-        launch_simple_gemm_kernel(1, d_model, d_k, d_X, d_W_V, d_V_cache);
+        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_X, d_W_K, K_blocks, K_page_table);
+        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_X, d_W_V, V_blocks, V_page_table);
       } else {
         float* d_new_embed = d_X + (t - 1) * d_model;
         float* d_K_tail = d_K_cache + (t - 1) * d_k;
         float* d_V_tail = d_V_cache + (t - 1) * d_k;
-        launch_simple_gemm_kernel(1, d_model, d_k, d_new_embed, d_W_K, d_K_tail);
-        launch_simple_gemm_kernel(1, d_model, d_k, d_new_embed, d_W_V, d_V_tail);
+        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_new_embed, d_W_K, d_K_tail);
+        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_new_embed, d_W_V, d_V_tail);
       }
     }
 

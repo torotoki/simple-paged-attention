@@ -3,6 +3,7 @@
 #include "common/cuda_utility.hpp"
 
 #define MAX_NUM_SEQUENCES 32
+#define TOKENS_PER_BLOCK 4
 #define MAX_NUM_BLOCKS_PER_SEQ 64  // context_size = 64 * 4 = 256
 #define MAX_BLOCKS (MAX_NUM_SEQUENCES * MAX_NUM_BLOCKS_PER_SEQ)
 
@@ -25,7 +26,19 @@ __host__ void init_blocks(scalar_t* blocks, int d_k) {
   checkCudaErrors(cudaMalloc(&blocks, MAX_BLOCKS * d_k * sizeof(scalar_t)));
 }
 
-__device__ int translate_address(
+template<typename scalar_t>
+__host__ void allocate_block(
+    unsigned int physical_address,
+    scalar_t* block,
+    int d_k,
+    int* page_table,
+    scalar_t* cache_blocks
+) {
+  // TODO: allocate block naively on the page table
+  checkCudaErrors(cudaMalloc(&block, TOKENS_PER_BLOCK * d_k * sizeof(scalar_t)));
+}
+
+__device__ unsigned int translate_address(
     unsigned int seq_idx,
     unsigned int block_idx,
     unsigned int* page_table
@@ -38,7 +51,7 @@ __device__ int translate_address(
     printf("Error: the virtual address is out of range.\n");
   }
   
-  int physical_address = page_table[virtual_address];
+  unsigned int physical_address = page_table[virtual_address];
   return physical_address;
 }
 

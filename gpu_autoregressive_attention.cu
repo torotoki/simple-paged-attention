@@ -199,7 +199,7 @@ Matrix<float> launch_autoregressive_attention_kernels(
       launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_K, d_K_cache);
       launch_simple_gemm_kernel(t, d_model, d_k, d_X, d_W_V, d_V_cache);
     } else {
-      // Reuse a part of K and V that have been already computed
+      // Reuse parts of K and V that have already been computed
       if (t == 1) {
         launch_simple_gemm_kernel(1, d_model, d_k, d_X, d_W_K, d_K_cache);
         launch_simple_gemm_kernel(1, d_model, d_k, d_X, d_W_V, d_V_cache);
