@@ -8,7 +8,8 @@
 
 namespace cg = cooperative_groups;
 
-namespace GPUAutoregressiveAttention {
+namespace PagedAttention {
+
 __global__ void simple_gemm_kernel(
     int N, int M, int L,
     float* A, float* B, float* C
@@ -43,10 +44,45 @@ void launch_simple_gemm_kernel(
   );
 }
 
+__global__ void simple_gemm_kernel(
+    int N, int M, int L,
+    float* A, Blocks<float>* B_blocks, float* C
+) {
+    int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int global_idy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (global_idx >= N || global_idy >= L) return;
+    
+    float sum = 0.0f;
+    for (int j = 0; j < M; ++j) {
+      float B_elem = *fetch_block(j, global_idy, B_blocks);
+      sum += A[global_idx * M + j] * B_elem;
+    }
+    C[global_idx * L + global_idy] = sum;
+}
+
+void launch_simple_gemm_kernel(
+  int N,
+  int M,
+  int L,
+  float* d_A,
+  Blocks<float>* B_blocks,
+  float* d_out
+) {
+  dim3 block_size(16, 16);
+  dim3 grid_size(
+      (N + block_size.x - 1) / block_size.x,
+      (L + block_size.y - 1) / block_size.y
+  );
+  simple_gemm_kernel<<<grid_size, block_size>>>(
+      N, M, L,
+      d_A, B_blocks, d_out
+  );
+}
+
 __global__ void simple_gemm_with_cache_kernel(
     int N, int M, int L,
     float* A, float* B,
-    unsigned int* C_page_table, float* C_blocks
+    Blocks<float>* C_blocks
 ) {
     int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int global_idy = blockIdx.y * blockDim.y + threadIdx.y;
@@ -56,14 +92,13 @@ __global__ void simple_gemm_with_cache_kernel(
     for (int j = 0; j < M; ++j) {
       sum += A[global_idx * M + j] * B[j * L + global_idy];
     }
-    int physical_address = translate_address(
-        global_idx,
-        global_idy / TOKENS_PER_BLOCK,
-        C_page_table
+    float* out_addr = fetch_block<float>(
+        global_idx, // seq_idx
+        global_idy,  // token_idx
+        C_blocks
     );
-
-    //C[global_idx * L + global_idy] = sum;
-    C_page_table[physical_address + (global_idy % TOKENS_PER_BLOCK)] = sum;
+    
+    *out_addr = sum;
 }
 
 void launch_simple_gemm_kernel_with_cache(
@@ -72,8 +107,7 @@ void launch_simple_gemm_kernel_with_cache(
   int L,
   float* d_A,
   float* d_B,
-  unsigned int* d_out_page_table,
-  float* d_out_blocks
+  Blocks<float>* d_out_blocks
 ) {
   dim3 block_size(16, 16);
   dim3 grid_size(
@@ -83,13 +117,13 @@ void launch_simple_gemm_kernel_with_cache(
   simple_gemm_with_cache_kernel<<<grid_size, block_size>>>(
       N, M, L,
       d_A, d_B,
-      d_out_page_table, d_out_blocks
+      d_out_blocks
   );
 }
 
 __global__ void transpose_gemm_imbalance_kernel(
     int N, int r, int M,
-    float* A, float* B, float* out
+    float* A, Blocks<float>* B_blocks, float* out
 ) {
   /**
    * Compute A ・B^T
@@ -106,7 +140,8 @@ __global__ void transpose_gemm_imbalance_kernel(
     // Q (N x d_k),  K (N x d_k)
     // Q (N x d_k) \dot K^T (d_k x N)
     // out (N x N)
-    sum += A[global_idy * M + j] * B[global_idx * M + j];
+    float B_value = *fetch_block(global_idx, j, B_blocks);
+    sum += A[global_idy * M + j] * B_value;
   }
   out[global_idy * r + global_idx] = sum;
 }
@@ -116,7 +151,7 @@ void launch_transpose_gemm_imbalance_kernel(
   int r,
   int M,
   float* A,
-  float* B,
+  Blocks<float>* B_blocks,
   float* out
 ) {
   dim3 block_size(16, 1);
@@ -125,7 +160,7 @@ void launch_transpose_gemm_imbalance_kernel(
       (N + block_size.y - 1) / block_size.y
   );
   transpose_gemm_imbalance_kernel<<<grid_size, block_size>>>(
-      N, r, M, A, B, out
+      N, r, M, A, B_blocks, out
   );
 }
 
@@ -189,7 +224,7 @@ void launch_softmax_norm_kernel(
 }
 
 
-Matrix<float> launch_autoregressive_attention_kernels(
+Matrix<float> launch_paged_attention_kernels(
     int context_size,
     int d_model,
     int d_k,
@@ -215,18 +250,22 @@ Matrix<float> launch_autoregressive_attention_kernels(
   checkCudaErrors(cudaMemcpy(d_W_V, h_W_V.get(), weight_size, cudaMemcpyDefault));
   checkCudaErrors(cudaMemcpy(d_X, h_X.get(), input_size, cudaMemcpyDefault));
 
-  // Intermediate output for projection
-  // float *d_K_cache, *d_V_cache;
-  // checkCudaErrors(cudaMalloc(&d_K_cache, context_size * d_k * sizeof(float)));
-  // checkCudaErrors(cudaMalloc(&d_V_cache, context_size * d_k * sizeof(float)));
-
-  // Initialize paging manager for KV-caches
-  int *K_page_table, *V_page_table;
-  int *K_blocks, *V_blocks;
-  init_page_table(K_page_table);
-  init_page_table(V_page_table);
-  init_blocks(K_blocks, d_k);
-  init_blocks(V_blocks, d_k);
+  // Initialize paging manager on Unified Memory for KV-caches
+  Blocks<float>* K_blocks = nullptr;
+  Blocks<float>* V_blocks = nullptr;
+  checkCudaErrors(cudaMallocManaged(&K_blocks, sizeof(Blocks<float>)));
+  checkCudaErrors(cudaMallocManaged(&V_blocks, sizeof(Blocks<float>)));
+  K_blocks->block_table = nullptr;
+  K_blocks->blocks = nullptr;
+  V_blocks->block_table = nullptr;
+  V_blocks->blocks = nullptr;
+  // checkCudaErrors(cudaMalloc(&K_blocks->block_table, 2048 * sizeof(int)));
+  // cudaGetLastError();
+  // printf("Malloc successed!\n");
+  init_page_table(K_blocks->block_table);
+  init_page_table(V_blocks->block_table);
+  init_blocks(K_blocks->blocks, d_k);
+  init_blocks(V_blocks->blocks, d_k);
 
   // Reuse d_Q over the time
   float* d_Q;
@@ -237,6 +276,8 @@ Matrix<float> launch_autoregressive_attention_kernels(
   float *d_out;
   size_t output_size = context_size * d_k * sizeof(float);
   checkCudaErrors(cudaMalloc(&d_out, output_size));
+
+  // TODO: allocate memory for paging mechanisms: block_table and blocks
 
   // Compute the multiplicative attention iteratively
   for (int t = 1; t <= context_size; ++t) {
@@ -249,33 +290,33 @@ Matrix<float> launch_autoregressive_attention_kernels(
     launch_simple_gemm_kernel(1, d_model, d_k, d_last_word_embed, d_W_Q, d_Q);
     
     if (!enable_kv_cache) {
-      // TODO: replace launch_simple_gemm_kernel with KV-cache
-      launch_simple_gemm_kernel_with_cache(t, d_model, d_k, d_X, d_W_K, K_blocks, K_page_table);
-      launch_simple_gemm_kernel_with_cache(t, d_model, d_k, d_X, d_W_V, V_blocks, V_page_table);
+      launch_simple_gemm_kernel_with_cache(t, d_model, d_k, d_X, d_W_K, K_blocks);
+      launch_simple_gemm_kernel_with_cache(t, d_model, d_k, d_X, d_W_V, V_blocks);
     } else {
       // Reuse parts of K and V that have already been computed
-      if (t == 1) {
-        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_X, d_W_K, K_blocks, K_page_table);
-        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_X, d_W_V, V_blocks, V_page_table);
-      } else {
-        float* d_new_embed = d_X + (t - 1) * d_model;
-        float* d_K_tail = d_K_cache + (t - 1) * d_k;
-        float* d_V_tail = d_V_cache + (t - 1) * d_k;
-        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_new_embed, d_W_K, d_K_tail);
-        launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_new_embed, d_W_V, d_V_tail);
-      }
+      // TODO: Add methods to force to update the partial results of GEMM
+      // if (t == 1) {
+      //   launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_X, d_W_K, K_blocks, K_page_table);
+      //   launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_X, d_W_V, V_blocks, V_page_table);
+      // } else {
+      //   float* d_new_embed = d_X + (t - 1) * d_model;
+      //   float* d_K_tail = d_K_cache + (t - 1) * d_k;
+      //   float* d_V_tail = d_V_cache + (t - 1) * d_k;
+      //   launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_new_embed, d_W_K, d_K_tail);
+      //   launch_simple_gemm_kernel_with_cache(1, d_model, d_k, d_new_embed, d_W_V, d_V_tail);
+      // }
     }
 
     // QKT (1 x t) = Q (1 x d_k) ・K^T (t x d_k)^T
     float* d_QKT;
     checkCudaErrors(cudaMalloc(&d_QKT, 1 * t * sizeof(float)));
-    launch_transpose_gemm_imbalance_kernel(1, t, d_k, d_Q, d_K_cache, d_QKT);
+    launch_transpose_gemm_imbalance_kernel(1, t, d_k, d_Q, K_blocks, d_QKT);
     
     launch_softmax_norm_kernel(1, t, d_QKT, d_k);
     
     // Extract t-th output embedding
     float* d_out_single_word = &d_out[h_out.num_cols * (t - 1)];
-    launch_simple_gemm_kernel(1, t, d_k, d_QKT, d_V_cache, d_out_single_word);
+    launch_simple_gemm_kernel(1, t, d_k, d_QKT, V_blocks, d_out_single_word);
 
     checkCudaErrors(cudaFree(d_QKT));
   }
@@ -286,8 +327,8 @@ Matrix<float> launch_autoregressive_attention_kernels(
   // Free memory
   checkCudaErrors(cudaFree(d_out));
   checkCudaErrors(cudaFree(d_Q));
-  checkCudaErrors(cudaFree(d_K_cache));
-  checkCudaErrors(cudaFree(d_V_cache));
+  // checkCudaErrors(cudaFree(d_K_cache));
+  // checkCudaErrors(cudaFree(d_V_cache));
   checkCudaErrors(cudaFree(d_W_Q));
   checkCudaErrors(cudaFree(d_W_K));
   checkCudaErrors(cudaFree(d_W_V));

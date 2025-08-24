@@ -10,7 +10,8 @@
 #include "cpu_attention.hpp"
 #include "gpu_attention.cuh"
 #include "cpu_autoregressive_attention.hpp"
-#include "gpu_autoregressive_attention.hpp"
+#include "gpu_autoregressive_attention.cuh"
+#include "paged_attention.cuh"
 
 using namespace std;
 
@@ -148,6 +149,15 @@ double runBenchmarkOneIter(
       cout << endl;
     }
     assert(computed == expected);
+  } else if (command == "paged_attention") {
+    Stopwatch stopwatch = Stopwatch("cuda");
+    stopwatch.start();
+    Matrix<float> computed =
+      PagedAttention::launch_paged_attention_kernels(
+          context_size, d_model, d_k, W_Q, W_K, W_V, X
+      );
+    stopwatch.stop();
+    elapsed_time_msec = stopwatch.get_elapsed_time_msec();
   } else {
     throw std::runtime_error("Unknown command: " + command);
   }
@@ -178,12 +188,12 @@ void runBenchmark(
 }
 
 int main(int argc, char* argv[]) {
-  string command = "attention_gpu_autoregressive";
+  string command = "paged_attention";
   if (argc >= 2) {
     command = argv[1];
   }
   
   cout << "Command: " << command << endl;
-  // runBenchmarkOneIter(command);
-  runBenchmark(command);
+  runBenchmarkOneIter(command);
+  //runBenchmark(command);
 }
